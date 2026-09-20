@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>EchoHands</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #081116;
+            --panel: #121d24;
+            --line: #263841;
+            --muted: #91a4ad;
+            --teal: #18d6b1;
+            --blue: #65a7ff
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+            background: var(--bg);
+            color: #edf7f5;
+            font: 14px Segoe UI, sans-serif
+        }
+
+        button,
+        input,
+        select {
+            font: inherit
+        }
+
+        button {
+            padding: 8px 10px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #17262e;
+            color: inherit;
+            cursor: pointer
+        }
+
+        button:hover {
+            border-color: var(--teal)
+        }
+
+        button:focus-visible,
+        input:focus-visible,
+        select:focus-visible {
+            outline: 3px solid #ffc857;
+            outline-offset: 2px
+        }
+
+        .app {
+            height: 100vh;
+            display: grid;
+            grid-template-rows: auto 1fr 140px
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 11px 16px;
+            background: #0c171d;
+            border-bottom: 1px solid var(--line)
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px
+        }
+
+        .brand-mark {
+            display: grid;
+            place-items: center;
+            width: 35px;
+            height: 35px;
+            border-radius: 9px;
+            background: var(--teal);
+            color: #06221d
+        }
+
+        h1,
+        h2,
+        p {
+            margin: 0
+        }
+
+        h1 {
+            font-size: 19px
+        }
+
+        h2 {
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: .1em
+        }
+
+        .sub {
+            color: var(--muted);
+            font-size: 11px
+        }
+
+        .statuses {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap
+        }
+
+        .pill {
+            padding: 5px 8px;
+            border: 1px solid var(--line);
+            border-radius: 99px;
+            color: var(--muted);
+            font-size: 11px
+        }
+
+        .dot {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            margin-right: 5px;
+            border-radius: 50%;
+            background: #63747a
+        }
+
+        .active {
+            background: var(--teal);
+            box-shadow: 0 0 8px var(--teal)
+        }
+
+        main {
+            min-height: 0;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 9px;
+            padding: 9px
+        }
+
+        .panel {
+            min-width: 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-radius: 11px;
+            background: var(--panel)
+        }
+
+        .head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 11px 13px;
+            border-bottom: 1px solid var(--line)
+        }
+
+        .title {
+            display: flex;
+            align-items: center;
+            gap: 8px
+        }
+
+        .title svg {
+            color: var(--teal)
+        }
+
+        .body {
+            min-height: 0;
+            flex: 1;
+            display: grid;
+            grid-template-rows: minmax(170px, 1fr) auto auto
+        }
+
+        .viewport {
+            position: relative;
+            min-height: 0;
+            overflow: hidden;
+            background: #050a0d
+        }
+
+        .label,
+        .tag {
+            position: absolute;
+            top: 10px;
+            padding: 6px 8px;
+            border: 1px solid #34505a;
+            border-radius: 7px;
+            background: #050a0dcc;
+            font-size: 11px
+        }
+
+        .label {
+            left: 10px
+        }
+
+        .tag {
+            right: 10px;
+            color: var(--teal)
+        }
+
+        .left {
+            right: auto;
+            left: 10px
+        }
+
+        .empty {
+            position: absolute;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            text-align: center;
+            padding: 20px;
+            color: var(--muted);
+            background: radial-gradient(circle at 50% 35%, #18343b, #050a0d 65%)
+        }
+
+        .empty strong {
+            display: block;
+            color: #edf7f5;
+            margin: 7px 0 2px
+        }
+
+        #webcam {
+            display: none;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1)
+        }
+
+        #landmarkCanvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none
+        }
+
+        .confidence {
+            position: absolute;
+            right: 10px;
+            bottom: 10px;
+            padding: 7px 9px;
+            border: 1px solid #34505a;
+            border-radius: 8px;
+            background: #050a0dcc
+        }
+
+        .readout {
+            padding: 10px 13px;
+            border-top: 1px solid var(--line)
+        }
+
+        .readout small {
+            color: var(--muted)
+        }
+
+        .readout strong {
+            display: block;
+            color: var(--blue);
+            font-size: 17px
+        }
+
+        .caption {
+            min-height: 42px;
+            margin-top: 5px;
+            padding: 8px;
+            border: 1px solid var(--line);
+            border-radius: 7px;
+            background: #0b151b;
+            font-size: 15px
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            padding: 9px 13px;
+            border-top: 1px solid var(--line)
+        }
+
+        .primary {
+            border-color: var(--teal);
+            background: var(--teal);
+            color: #06221d;
+            font-weight: 700
+        }
+
+        .text {
+            min-width: 0;
+            flex: 1;
+            padding: 8px;
+            border: 1px solid var(--line);
+            border-radius: 7px;
+            background: #0b151b;
+            color: inherit
+        }
+
+        select {
+            padding: 7px;
+            border: 1px solid var(--line);
+            border-radius: 7px;
+            background: #17262e;
+            color: inherit
+        }
+
+        #avatarCanvasContainer {
+            width: 100%;
+            height: 100%;
+            min-height: 220px;
+            background: radial-gradient(circle at 50% 35%, #1a3a40, #071015 68%)
+        }
+
+        footer {
+            min-height: 0;
+            padding: 9px 13px;
+            overflow: auto;
+            border-top: 1px solid var(--line);
+            background: #0c171d
+        }
+
+        .log-head {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            color: var(--muted);
+            font-size: 11px;
+            text-transform: uppercase
+        }
+
+        .log-item {
+            display: flex;
+            gap: 7px;
+            padding: 6px 8px;
+            margin: 4px 0;
+            border: 1px solid #1f323a;
+            border-radius: 6px;
+            background: #101e25;
+            font-size: 12px
+        }
+
+        .log-item time {
+            margin-left: auto;
+            color: #6f838b;
+            font-size: 10px
+        }
+
+        @media(max-width:800px) {
+            body {
+                overflow: auto
+            }
+
+            .app {
+                height: auto;
+                min-height: 100vh;
+                grid-template-rows: auto auto 140px
+            }
+
+            header {
+                flex-wrap: wrap
+            }
+
+            .statuses {
+                order: 3;
+                width: 100%
+            }
+
+            main {
+                grid-template-columns: 1fr
+            }
+
+            .panel {
+                min-height: 410px
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <header>
+            <div class="brand">
+                <div class="brand-mark"><i data-lucide="hand"></i></div>
+                <div>
+                    <h1>EchoHands</h1>
+                    <p class="sub">Two-way sign and speech communication</p>
+                </div>
+            </div>
+            <div class="statuses"><span class="pill"><span class="dot active"></span>Offline engine ready</span><span
+                    class="pill"><span id="cameraDot" class="dot"></span><span id="cameraStatus">Camera
+                        idle</span></span><span class="pill"><span id="micDot" class="dot"></span><span
+                        id="micStatus">Mic muted</span></span></div>
+            <div><button id="contrastButton" aria-label="Toggle high contrast"><i data-lucide="eye"></i></button><button
+                    id="clearButton" aria-label="Clear log"><i data-lucide="trash-2"></i></button></div>
+        </header>
+        <main>
+            <section class="panel">
+                <div class="head">
+                    <div class="title"><i data-lucide="camera"></i>
+                        <div>
+                            <h2>Signer perspective</h2>
+                            <p class="sub">Mode A - Python MediaPipe camera</p>
+                        </div>
+                    </div><button id="cameraButton" class="primary"><i data-lucide="video"></i> Start camera</button>
+                </div>
+                <div class="body">
+                    <div class="viewport">
+                        <div id="cameraEmpty" class="empty">
+                            <div><i data-lucide="video-off"></i><strong>Camera feed is idle</strong><span>Start the
+                                    Python camera worker.</span></div>
+                        </div><video id="webcam" autoplay muted playsinline></video><canvas
+                            id="landmarkCanvas"></canvas>
+                        <div class="label">Mirrored hand tracking</div>
+                        <div class="confidence"><small id="poseLabel">WAITING FOR HAND</small></div>
+                    </div>
+                    <div class="readout"><small>Detected sign / current pose</small><strong
+                            id="detectedSign">IDLE</strong></div>
+                    <div class="controls"><button id="simulateButton"><i data-lucide="hand"></i> Simulate
+                            Namaste</button><button id="speakDetectedButton"><i data-lucide="volume-2"></i> Replay
+                            voice</button></div>
+                </div>
+            </section>
+            <section class="panel">
+                <div class="head">
+                    <div class="title"><i data-lucide="user-round"></i>
+                        <div>
+                            <h2>Speaker perspective</h2>
+                            <p class="sub">Mode B - Python Vosk to avatar</p>
+                        </div>
+                    </div><label class="sub">Speed <select id="speedSelect" aria-label="Avatar speed">
+                            <option value=".75">0.75x</option>
+                            <option value="1" selected>1.0x</option>
+                            <option value="1.25">1.25x</option>
+                        </select></label>
+                </div>
+                <div class="body">
+                    <div class="viewport">
+                        <div id="avatarCanvasContainer"></div><span id="avatarStatus" class="tag">Avatar
+                            loading...</span><span id="currentSign" class="tag left">IDLE</span>
+                    </div>
+                    <div class="readout"><small>Current speech transcription</small>
+                        <div id="speechCaption" class="caption" aria-live="polite">Waiting for offline speech...</div>
+                    </div>
+                    <div class="controls"><button id="micButton" class="primary"><i data-lucide="mic"></i> Start
+                            listening</button><input id="speechInput" class="text"
+                            placeholder="Type a phrase to sign..." aria-label="Text to sign"><button
+                            id="translateButton" class="primary" aria-label="Send text to avatar"><i
+                                data-lucide="send"></i></button><button id="replayButton"
+                            aria-label="Replay last sign"><i data-lucide="rotate-ccw"></i></button></div>
+                </div>
+            </section>
+        </main>
+        <footer>
+            <div class="log-head"><span>Shared conversation log</span><span id="queueCount">0 queued</span></div>
+            <div id="logList">
+                <div class="log-item">EchoHands is ready for both users.<time>READY</time></div>
+            </div>
+        </footer>
+    </div>
+    <script src="frontend_bridge.js"></script>
+</body>
+
+</html>

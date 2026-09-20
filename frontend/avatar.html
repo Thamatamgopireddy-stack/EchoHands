@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Sign Language Avatar Viewer</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #1a1a1a;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+
+        #overlay-ui {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            color: #fff;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.65);
+            padding: 12px 18px;
+            border-radius: 8px;
+            backdrop-filter: blur(4px);
+            max-width: 320px;
+        }
+
+        #status-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #e74c3c;
+            margin-right: 6px;
+        }
+
+        #status-dot.connected {
+            background: #2ecc71;
+        }
+
+        .status-line {
+            font-size: 14px;
+            margin-bottom: 6px;
+        }
+
+        .queue-line {
+            font-size: 12px;
+            color: #aaa;
+            word-break: break-all;
+        }
+
+        #current-token {
+            color: #f1c40f;
+            font-weight: bold;
+        }
+    </style>
+
+    <script src="vendor/three.min.js"></script>
+    <script src="vendor/GLTFLoader.js"></script>
+</head>
+
+<body>
+    <div id="overlay-ui">
+        <div class="status-line">
+            <span id="status-dot"></span>
+            <span id="status-text">Connecting to Python...</span>
+        </div>
+        <div class="queue-line">Signing: <span id="current-token">IDLE</span></div>
+        <div class="queue-line">Remaining: <span id="queue-display">[]</span></div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        const CONFIG = {
+            wsUrl: "ws://127.0.0.1:8765",
+            modelPath: "../assets/avatar.glb",
+            animBasePath: "../assets/animations/",
+            crossfadeDuration: 0.18
+        };
+
+        let scene, camera, renderer, clock;
+        let avatarModel, mixer;
+        let idleAction = null;
+        let currentAction = null;
+        const clipCache = new Map();
+        const loader = new THREE.GLTFLoader();
+        let animationQueue = [];
+        let isPlayingSequence = false;
+        let signPoses = {};
+        let poseTransition = null;
+        const signPosesReady = fetch("../assets/sign_landmarks.json")
+            .then((response) => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            })
+            .then((data) => {
+                signPoses = data;
+                console.log(`[Sign Engine] Loaded ${Object.keys(signPoses).length} landmark poses.`);
+            })
+            .catch((error) => console.error("[Sign Engine] Could not load landmark poses:", error));
+
+        function initScene() {
+            const container = document.getElementById("canvas-container");
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a1a);
+
+            camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 1.35, 1.3);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            container.appendChild(renderer.domElement);
+            clock = new THREE.Clock();
+
+            scene.add(new THREE.HemisphereLight(0xffffff, 0x333333, 0.9));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(2, 4, 3);
+            scene.add(dirLight);
+            const fillLight = new THREE.DirectionalLight(0xaaccff, 0.4);
+            fillLight.position.set(-2, 2, 2);
+            scene.add(fillLight);
+            window.addEventListener("resize", onWindowResize);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function loadAvatar() {
+            loader.load(CONFIG.modelPath, (gltf) => {
+                avatarModel = gltf.scene;
+                avatarModel.position.set(0, 0, 0);
+                scene.add(avatarModel);
+                mixer = new THREE.AnimationMixer(avatarModel);
+
+                if (gltf.animations && gltf.animations.length > 0) {
+                    const idleClip = gltf.animations.find((animation) =>
+                        animation.name.toLowerCase().includes("idle")
+                    ) || gltf.animations[0];
+                    idleAction = mixer.clipAction(idleClip);
+                    idleAction.play();
+                    currentAction = idleAction;
+                }
+                mixer.addEventListener("finished", onClipFinished);
+            }, undefined, (error) => console.error("[Avatar Error]", error));
+        }
+
+        async function getOrFetchClip(token) {
+            const sanitized = token.toUpperCase().trim();
+            if (clipCache.has(sanitized)) return clipCache.get(sanitized);
+
+            const filePath = `${CONFIG.animBasePath}${sanitized}.glb`;
+            try {
+                const gltf = await loader.loadAsync(filePath);
+                if (gltf.animations && gltf.animations.length > 0) {
+                    const clip = gltf.animations[0];
+                    clip.name = sanitized;
+                    clipCache.set(sanitized, clip);
+                    return clip;
+                }
+            } catch (error) {
+                console.warn(`[Anim Loader] Missing file for token: ${sanitized}`);
+            }
+            return null;
+        }
+
+        async function playSequence(tokens) {
+            if (!tokens || tokens.length === 0) return;
+            animationQueue.push(...tokens.map((token) => token.toUpperCase().trim()));
+            updateQueueUI();
+
+            if (!isPlayingSequence) {
+                isPlayingSequence = true;
+                playNextToken();
+            }
+        }
+
+        async function playNextToken() {
+            if (animationQueue.length === 0) {
+                returnToIdle();
+                return;
+            }
+
+            const nextToken = animationQueue.shift();
+            updateQueueUI(nextToken);
+            const clip = await getOrFetchClip(nextToken);
+
+            if (!clip) {
+                await playProceduralPose(nextToken);
+                playNextToken();
+                return;
+            }
+            executeCrossfade(clip);
+        }
+
+        function getPoseName(token) {
+            const normalized = token.toUpperCase().trim();
+            if (signPoses[normalized]) return normalized;
+            const letterPose = `LETTER_${normalized}`;
+            return signPoses[letterPose] ? letterPose : null;
+        }
+
+        function findBone(names) {
+            for (const name of names) {
+                const bone = avatarModel && avatarModel.getObjectByName(name);
+                if (bone) return bone;
+            }
+            return null;
+        }
+
+        function createPoseTargets(points) {
+            const fingers = [
+                ["Thumb", 1], ["Index", 5], ["Middle", 9], ["Ring", 13], ["Pinky", 17]
+            ];
+            const up = new THREE.Vector3(0, 1, 0);
+            const targets = [];
+            for (const [finger, start] of fingers) {
+                for (let segment = 0; segment < 3; segment += 1) {
+                    const from = new THREE.Vector3(...points[start + segment]);
+                    const to = new THREE.Vector3(...points[start + segment + 1]);
+                    const direction = to.sub(from).normalize();
+                    const bone = findBone([
+                        `RightHand${finger}${segment + 1}`,
+                        `Right${finger}${segment + 1}`,
+                        `${finger}_${segment + 1}`,
+                        `${finger}${segment + 1}`
+                    ]);
+                    if (bone && direction.lengthSq() > 0) {
+                        const target = new THREE.Quaternion().setFromUnitVectors(up, direction);
+                        targets.push({ bone, start: bone.quaternion.clone(), target });
+                    }
+                }
+            }
+            return targets;
+        }
+
+        async function playProceduralPose(token) {
+            await signPosesReady;
+            const poseName = getPoseName(token);
+            const pose = poseName && signPoses[poseName];
+            if (!pose || !avatarModel) return;
+
+            const targets = createPoseTargets(pose.landmarks);
+            if (targets.length === 0) return;
+            poseTransition = { targets, startedAt: performance.now() };
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            poseTransition = null;
+        }
+
+        function executeCrossfade(newClip) {
+            const nextAction = mixer.clipAction(newClip);
+            nextAction.reset();
+            nextAction.setLoop(THREE.LoopOnce, 1);
+            nextAction.clampWhenFinished = true;
+
+            if (currentAction) {
+                nextAction.crossFadeFrom(currentAction, CONFIG.crossfadeDuration, true);
+            }
+            nextAction.play();
+            currentAction = nextAction;
+        }
+
+        function onClipFinished(event) {
+            if (currentAction && event.action === currentAction && currentAction !== idleAction) {
+                playNextToken();
+            }
+        }
+
+        function returnToIdle() {
+            isPlayingSequence = false;
+            updateQueueUI("IDLE");
+
+            if (idleAction && currentAction !== idleAction) {
+                idleAction.reset();
+                idleAction.crossFadeFrom(currentAction, CONFIG.crossfadeDuration, true);
+                idleAction.play();
+                currentAction = idleAction;
+            }
+        }
+
+        function initWebSocket() {
+            const statusDot = document.getElementById("status-dot");
+            const statusText = document.getElementById("status-text");
+            const ws = new WebSocket(CONFIG.wsUrl);
+
+            ws.onopen = () => {
+                statusDot.className = "connected";
+                statusText.innerText = "Python ASR Connected";
+            };
+            ws.onmessage = (event) => {
+                try {
+                    const payload = JSON.parse(event.data);
+                    if (payload.action === "play_sequence" && Array.isArray(payload.tokens)) {
+                        playSequence(payload.tokens);
+                    }
+                } catch (error) {
+                    console.error("[WS Error] Unparsable message:", event.data);
+                }
+            };
+            ws.onclose = () => {
+                statusDot.className = "";
+                statusText.innerText = "Reconnecting to Python...";
+                setTimeout(initWebSocket, 2500);
+            };
+            ws.onerror = () => ws.close();
+        }
+
+        function updateQueueUI(activeToken = null) {
+            if (activeToken) document.getElementById("current-token").innerText = activeToken;
+            document.getElementById("queue-display").innerText = JSON.stringify(animationQueue);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            if (mixer) mixer.update(delta);
+            if (poseTransition) {
+                const progress = Math.min((performance.now() - poseTransition.startedAt) / 200, 1);
+                for (const pose of poseTransition.targets) {
+                    pose.bone.quaternion.slerpQuaternions(pose.start, pose.target, progress);
+                }
+            }
+            renderer.render(scene, camera);
+        }
+
+        initScene();
+        loadAvatar();
+        initWebSocket();
+        animate();
+    </script>
+</body>
+
+</html>

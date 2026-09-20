@@ -1,0 +1,9 @@
+mediapipe>=0.10.9
+opencv-python>=4.8.0
+vosk>=0.3.45
+pyaudio>=0.2.13
+pyttsx3>=2.90
+websockets>=12.0
+pillow>=10.0.0
+pywebview>=5.3.2
+SpeechRecognition>=3.10.4
