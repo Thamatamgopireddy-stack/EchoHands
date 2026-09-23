@@ -5,7 +5,7 @@ import os
 import re
 import threading
 
-AVAILABLE_SIGNS = {"NAMASTE", "HELLO", "THANK_YOU", "YES", "NO"}
+AVAILABLE_SIGNS = {"NAMASTE", "HELLO", "THANK_YOU", "YES", "NO", "PLEASE", "HELP"}
 
 
 def tokenize_speech(text):
@@ -26,20 +26,24 @@ class ModeBWorker:
 
     def start(self):
         if self.running.is_set():
-            return
+            return True
         self.running.set()
         self.thread = threading.Thread(target=self._run, name="echohands-microphone", daemon=True)
         self.thread.start()
+        return True
 
     def stop(self):
         self.running.clear()
+        if self.thread and self.thread is not threading.current_thread():
+            self.thread.join(timeout=0.5)
+        self.thread = None
 
     def _run(self):
         try:
             import pyaudio
             from vosk import KaldiRecognizer, Model
             root = os.path.dirname(os.path.dirname(__file__))
-            model_path = self.model_path or os.path.join(root, "models", "vosk-model-small-en-us")
+            model_path = self.model_path or os.path.join(root, "models", "vosk-model-small-en-us-0.15")
             if not os.path.isdir(model_path):
                 raise FileNotFoundError(f"Vosk model not found: {model_path}")
             audio = pyaudio.PyAudio()

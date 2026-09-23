@@ -9,34 +9,27 @@ import time
 
 import webview
 
-try:
-    from modeA_engine import ModeAEngine
-    from modeB_engine import ModeBEngine
-except ModuleNotFoundError as error:
-    if error.name == "cv2":
-        raise SystemExit(
-            "OpenCV is not installed in this Python environment. "
-            "Run run_app.bat or use .venv\\Scripts\\python.exe app.py."
-        ) from error
-    raise
+from modeA_engine import ModeAEngine
+from modeB_engine import ModeBEngine
 
 
 class EchoHandsApi:
     def __init__(self, app):
-        self.app = app
+        self._app = app
 
     def start_camera(self):
-        return bool(self.app.camera.start())
+        return bool(self._app.camera.start())
 
     def stop_camera(self):
-        self.app.camera.stop()
+        self._app.camera.stop()
         return True
 
     def start_microphone(self):
-        return bool(self.app.microphone.start())
+        started = bool(self._app.microphone.start())
+        return started
 
     def stop_microphone(self):
-        self.app.microphone.stop()
+        self._app.microphone.stop()
         return True
 
 
@@ -47,7 +40,7 @@ class SignLanguageApp:
         self.frames = queue.Queue(maxsize=2)
         self.tts_queue = queue.Queue()
         self.camera = ModeAEngine(self.events, self.frames, self.tts_queue)
-        self.microphone = ModeBEngine(self.events, publish=self.publish_tokens)
+        self.microphone = ModeBEngine(self.events)
         self.api = EchoHandsApi(self)
         self._running = threading.Event()
 
@@ -81,14 +74,16 @@ class SignLanguageApp:
     def _event_loop(self):
         while self._running.is_set():
             try:
-                kind, message = self.events.get(timeout=0.2)
+                kind, message = self.events.get_nowait()
             except queue.Empty:
+                time.sleep(0.01)
                 continue
             if kind == "speech":
                 self._evaluate("onBackendSpeech", message)
             elif kind == "sign":
                 gesture, _, word = message.partition(": ")
                 self._evaluate("onBackendSign", gesture, word or gesture)
+                self.play_sign_on_avatar(word or gesture)
             elif kind == "info":
                 self._evaluate("onBackendStatus", message)
             elif kind == "error":
@@ -98,16 +93,17 @@ class SignLanguageApp:
         last_sent = 0.0
         while self._running.is_set():
             try:
-                frame, gesture = self.frames.get(timeout=0.2)
+                frame, gesture = self.frames.get_nowait()
             except queue.Empty:
+                time.sleep(0.005)
                 continue
             now = time.monotonic()
-            if now - last_sent < 0.1:
+            if now - last_sent < (1 / 30):
                 continue
             last_sent = now
             try:
                 import cv2
-                ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
+                ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
                 if ok:
                     image = base64.b64encode(encoded).decode("ascii")
                     self._evaluate("onBackendCameraFrame", image, gesture or "")
@@ -120,8 +116,9 @@ class SignLanguageApp:
             engine = pyttsx3.init()
             while self._running.is_set():
                 try:
-                    text = self.tts_queue.get(timeout=0.2)
+                    text = self.tts_queue.get_nowait()
                 except queue.Empty:
+                    time.sleep(0.01)
                     continue
                 engine.say(text)
                 engine.runAndWait()

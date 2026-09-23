@@ -1,66 +1,68 @@
-# -*- coding: utf-8 -*-
+"""Non-blocking offline microphone listener for speech-to-sign playback."""
+
+import json
+import os
 import threading
-import time
-import speech_recognition as sr
 
 
 class ModeBEngine:
-    """Mode B speech engine that publishes words to the avatar queue."""
-
-    def __init__(self, events_queue=None, publish=None):
+    def __init__(self, events_queue=None, publish=None, model_path=None):
         self.events = events_queue
         self.publish = publish
-        self.running = False
+        self.model_path = model_path
+        self.running = threading.Event()
         self.thread = None
-        self.recognizer = sr.Recognizer()
-        self.mic = None
 
     def start(self):
-        if self.running:
+        if self.running.is_set():
             return True
-        try:
-            self.mic = sr.Microphone()
-        except Exception as error:
-            self._event("error", f"Microphone init failed: {error}")
-            return False
-        self.running = True
-        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.running.set()
+        self.thread = threading.Thread(target=self._listen_loop, name="ModeB-Worker", daemon=True)
         self.thread.start()
         return True
 
     def stop(self):
-        self.running = False
+        self.running.clear()
+        if self.thread and self.thread is not threading.current_thread():
+            self.thread.join(timeout=1.0)
+        self.thread = None
 
     def _event(self, kind, message):
         if self.events:
             self.events.put((kind, message))
 
-    def _loop(self):
-        self._event("info", "Listening for speech...")
+    def _listen_loop(self):
+        audio = None
+        stream = None
         try:
-            with self.mic as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            import pyaudio
+            from vosk import KaldiRecognizer, Model
+
+            root = os.path.dirname(os.path.abspath(__file__))
+            model_path = self.model_path or os.path.join(root, "models", "vosk-model-small-en-us-0.15")
+            if not os.path.isdir(model_path):
+                raise FileNotFoundError(f"Offline speech model not found: {model_path}")
+
+            self._event("info", "Calibrating microphone...")
+            audio = pyaudio.PyAudio()
+            stream = audio.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=4000)
+            recognizer = KaldiRecognizer(Model(model_path), 16000)
+            self._event("info", "Listening for speech...")
+            while self.running.is_set():
+                data = stream.read(4000, exception_on_overflow=False)
+                if recognizer.AcceptWaveform(data):
+                    text = json.loads(recognizer.Result()).get("text", "").strip()
+                    if text:
+                        tokens = [word.upper() for word in text.split() if word.strip()]
+                        self._event("speech", text)
+                        if self.publish and tokens:
+                            self.publish(tokens)
         except Exception as error:
-            self._event("error", f"Ambient noise check failed: {error}")
-            self.running = False
-            return
-
-        while self.running:
-            try:
-                with self.mic as source:
-                    audio = self.recognizer.listen(source, timeout=3, phrase_time_limit=4)
-
-                text = self.recognizer.recognize_google(audio)
-                if text:
-                    self._event("speech", text)
-                    if self.publish:
-                        self.publish([word.upper() for word in text.split() if word.strip()])
-
-            except sr.WaitTimeoutError:
-                pass
-            except sr.UnknownValueError:
-                pass
-            except Exception as error:
-                self._event("error", f"Mic error: {error}")
-
-            time.sleep(0.1)
+            self._event("error", f"Microphone listener stopped: {error}")
+        finally:
+            if stream is not None:
+                stream.stop_stream()
+                stream.close()
+            if audio is not None:
+                audio.terminate()
+            self.running.clear()

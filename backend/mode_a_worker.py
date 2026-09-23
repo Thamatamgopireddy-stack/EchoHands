@@ -11,14 +11,16 @@ GESTURE_WORDS = {
     "OPEN_HAND": "hello",
     "FIST": "no",
     "POINTING": "please",
-    "VICTORY_V": "thank you",
+    "VICTORY_V": "yes",
     "THUMBS_UP": "yes",
     "THUMBS_DOWN": "no",
+    "OK_SIGN": "thank you",
+    "ILY_LOVE": "help",
 }
 
 
 class LandmarkClassifier:
-    """Match normalized MediaPipe landmarks against static hand templates."""
+    """Classify common gestures from MediaPipe hand coordinates."""
 
     def __init__(self, templates_path=None, threshold=0.65):
         if templates_path is None:
@@ -51,7 +53,30 @@ class LandmarkClassifier:
     def classify(self, landmarks):
         if len(landmarks) != 21:
             return None
-        live_vector = self._normalize(self._landmark_coordinates(landmarks))
+        points = self._landmark_coordinates(landmarks)
+        wrist = points[0]
+
+        def distance(first, second):
+            return math.sqrt(sum((first[axis] - second[axis]) ** 2 for axis in range(3)))
+
+        def extended(pip, tip):
+            return distance(points[tip], wrist) > distance(points[pip], wrist) * 1.12
+
+        fingers = {
+            "index": extended(6, 8),
+            "middle": extended(10, 12),
+            "ring": extended(14, 16),
+            "pinky": extended(18, 20),
+        }
+        count = sum(fingers.values())
+        if fingers["index"] and fingers["middle"] and count == 2:
+            return "VICTORY_V"
+        if fingers["index"] and count == 1:
+            return "POINTING"
+        if count >= 4:
+            return "OPEN_HAND"
+
+        live_vector = self._normalize(points)
         if live_vector is None:
             return None
         best_match, min_distance = None, float("inf")
@@ -61,7 +86,9 @@ class LandmarkClassifier:
             ))
             if distance < min_distance:
                 best_match, min_distance = name, distance
-        return best_match if min_distance < self.threshold else None
+        if min_distance < self.threshold:
+            return best_match
+        return "FIST" if count == 0 else None
 
 
 _CLASSIFIER = None
@@ -84,13 +111,17 @@ class ModeAWorker:
 
     def start(self):
         if self.running.is_set():
-            return
+            return True
         self.running.set()
         self.thread = threading.Thread(target=self._run, name="echohands-camera", daemon=True)
         self.thread.start()
+        return True
 
     def stop(self):
         self.running.clear()
+        if self.thread and self.thread is not threading.current_thread():
+            self.thread.join(timeout=0.5)
+        self.thread = None
 
     def _run(self):
         import cv2
@@ -109,6 +140,9 @@ class ModeAWorker:
         model = self.model_path or os.path.join(root, "models", "hand_landmarker.task")
         if not os.path.isfile(model):
             model = os.path.join(root, "hand_landmarker.task")
+        if not os.path.isfile(model):
+            self.events.put(("error", f"Hand landmark model not found: {model}"))
+            return
         try:
             options = mp.tasks.vision.HandLandmarkerOptions(
                 base_options=mp.tasks.BaseOptions(model_asset_path=model), running_mode=mp.tasks.vision.RunningMode.VIDEO,
@@ -120,6 +154,7 @@ class ModeAWorker:
         finally:
             cap.release()
             cv2.destroyAllWindows()
+            self.running.clear()
 
     def _capture(self, cap, landmarker, cv2, mp):
         previous, stable_count, last_spoken = None, 0, {}

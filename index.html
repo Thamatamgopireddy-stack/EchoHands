@@ -5,6 +5,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>EchoHands</title>
+    <link rel="icon" href="data:,">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -310,6 +311,12 @@
             color: inherit
         }
 
+        .speech-received {
+            border-color: var(--teal);
+            box-shadow: 0 0 0 2px #18d6b155;
+            transition: border-color .2s ease, box-shadow .2s ease
+        }
+
         select {
             padding: 7px;
             border: 1px solid var(--line);
@@ -319,10 +326,17 @@
         }
 
         #avatarCanvasContainer {
+            position: relative;
             width: 100%;
             height: 100%;
             min-height: 220px;
             background: radial-gradient(circle at 50% 35%, #1a3a40, #071015 68%)
+        }
+
+        #avatarCanvasContainer canvas {
+            display: block;
+            width: 100%;
+            height: 100%
         }
 
         footer {
@@ -439,7 +453,7 @@
                     <div class="title"><i data-lucide="user-round"></i>
                         <div>
                             <h2>Speaker perspective</h2>
-                            <p class="sub">Mode B - Python Vosk to avatar</p>
+                            <p class="sub">Mode B - Python speech to avatar</p>
                         </div>
                     </div><label class="sub">Speed <select id="speedSelect" aria-label="Avatar speed">
                             <option value=".75">0.75x</option>
@@ -449,8 +463,9 @@
                 </div>
                 <div class="body">
                     <div class="viewport">
-                        <div id="avatarCanvasContainer"></div><span id="avatarStatus" class="tag">Avatar
-                            loading...</span><span id="currentSign" class="tag left">IDLE</span>
+                        <div id="avatarCanvasContainer" aria-label="Three-dimensional sign language avatar"></div><span
+                            id="avatarStatus" class="tag">Loading anime avatar...</span><span id="currentSign"
+                            class="tag left">IDLE</span>
                     </div>
                     <div class="readout"><small>Current speech transcription</small>
                         <div id="speechCaption" class="caption" aria-live="polite">Waiting for offline speech...</div>
