@@ -24,16 +24,26 @@ class ModeAEngine:
         self.stable_count = 0
         self.last_spoken = {}
 
-    def start(self, cam_index=0):
+    def start(self, cam_index=None):
         if self.running.is_set():
             return True
-        capture = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW)
-        if not capture.isOpened():
-            capture.release()
-            capture = cv2.VideoCapture(cam_index)
-        if not capture.isOpened():
-            capture.release()
-            self._event("error", "Camera failed to open.")
+        indexes = [cam_index] if cam_index is not None else range(5)
+        capture = None
+        selected_index = None
+        for index in indexes:
+            candidate = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+            if not candidate.isOpened():
+                candidate.release()
+                candidate = cv2.VideoCapture(index)
+            if candidate.isOpened():
+                ok, _ = candidate.read()
+                if ok:
+                    capture = candidate
+                    selected_index = index
+                    break
+            candidate.release()
+        if capture is None:
+            self._event("error", "Camera failed to open or return a frame.")
             return False
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -42,6 +52,7 @@ class ModeAEngine:
         self.running.set()
         self.thread = threading.Thread(target=self._loop, name="ModeA-Worker", daemon=True)
         self.thread.start()
+        self._event("info", f"Camera {selected_index} opened")
         return True
 
     def stop(self):
@@ -59,6 +70,10 @@ class ModeAEngine:
             self.events.put((kind, message))
 
     def _publish_gesture(self, gesture):
+        if not gesture:
+            self.last_gesture = None
+            self.stable_count = 0
+            return
         now = time.monotonic()
         if gesture != self.last_gesture:
             self.last_gesture = gesture
